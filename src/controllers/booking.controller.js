@@ -1,0 +1,76 @@
+import { getAllBookings } from "../services/booking.service.js";
+
+const allowedRoomTypes = ["standard", "deluxe", "suite", "villa"];
+const allowedStatuses = ["pending", "confirmed", "cancelled", "completed"];
+
+export const getBookings = async (req, res) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
+
+    const search = req.query.search?.trim() || "";
+
+    const roomType = allowedRoomTypes.includes(req.query.roomType)
+      ? req.query.roomType
+      : "";
+
+    const status = allowedStatuses.includes(req.query.status)
+      ? req.query.status
+      : "";
+
+    const bookingDateFrom = req.query.bookingDateFrom || "";
+    const bookingDateTo = req.query.bookingDateTo || "";
+
+    const checkInDateFrom = req.query.checkInDateFrom || "";
+    const checkInDateTo = req.query.checkInDateTo || "";
+
+    const checkOutDateFrom = req.query.checkOutDateFrom || "";
+    const checkOutDateTo = req.query.checkOutDateTo || "";
+
+    const sortBy = req.query.sortBy || "bookingDate";
+    const sortOrder = req.query.sortOrder === "asc" ? "asc" : "desc";
+
+    const result = await getAllBookings({
+      page,
+      limit,
+      search,
+      roomType,
+      status,
+      bookingDateFrom,
+      bookingDateTo,
+      checkInDateFrom,
+      checkInDateTo,
+      checkOutDateFrom,
+      checkOutDateTo,
+      sortBy,
+      sortOrder,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Bookings fetched successfully",
+      data: result.bookings,
+      pagination: result.pagination,
+      filters: {
+        search,
+        roomType,
+        status,
+        bookingDateFrom,
+        bookingDateTo,
+        checkInDateFrom,
+        checkInDateTo,
+        checkOutDateFrom,
+        checkOutDateTo,
+        sortBy,
+        sortOrder,
+      },
+    });
+  } catch (error) {
+    console.error("Get Bookings Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch bookings",
+    });
+  }
+};

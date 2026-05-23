@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "seed:users": "node src/seed/users.seed.js"
+    "seed:users": "node src/seed/users.seed.js",
+    "seed:hotels": "node src/seed/hotels.seed.js",
+    "seed:bookings": "node src/seed/bookings.seed.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
