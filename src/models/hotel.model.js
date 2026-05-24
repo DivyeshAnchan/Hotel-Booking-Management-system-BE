@@ -85,12 +85,6 @@ const hotelSchema = new mongoose.Schema(
       min: 0,
     },
 
-    totalBooked: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
     isActive: {
       type: Boolean,
       default: true,

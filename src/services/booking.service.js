@@ -12,6 +12,15 @@ const allowedSortFields = {
   createdAt: "createdAt",
 };
 
+const allowedBookingStatuses = [
+  "pending",
+  "confirmed",
+  "cancelled",
+  "completed",
+];
+
+const activeRoomHoldStatuses = ["pending", "confirmed"];
+
 const buildDateFilter = (from, to) => {
   const dateFilter = {};
 
@@ -26,6 +35,59 @@ const buildDateFilter = (from, to) => {
   }
 
   return Object.keys(dateFilter).length ? dateFilter : null;
+};
+
+const generateBookingNumber = () => {
+  const year = new Date().getFullYear();
+  const randomNumber = Math.floor(100000 + Math.random() * 900000);
+
+  return `HB-${year}-${randomNumber}`;
+};
+
+const getBookedRoomsForHotel = async ({
+  hotelId,
+  checkInDate,
+  checkOutDate,
+  excludeBookingId = null,
+}) => {
+  const matchFilter = {
+    hotelId: new mongoose.Types.ObjectId(hotelId),
+    status: {
+      $in: activeRoomHoldStatuses,
+    },
+  };
+
+  if (checkInDate && checkOutDate) {
+    matchFilter.checkInDate = {
+      $lt: checkOutDate,
+    };
+
+    matchFilter.checkOutDate = {
+      $gt: checkInDate,
+    };
+  }
+
+  if (excludeBookingId) {
+    matchFilter._id = {
+      $ne: new mongoose.Types.ObjectId(excludeBookingId),
+    };
+  }
+
+  const [result] = await Booking.aggregate([
+    {
+      $match: matchFilter,
+    },
+    {
+      $group: {
+        _id: "$hotelId",
+        bookedRooms: {
+          $sum: "$roomsBooked",
+        },
+      },
+    },
+  ]);
+
+  return result?.bookedRooms || 0;
 };
 
 export const getAllBookings = async ({
@@ -102,18 +164,18 @@ export const getAllBookings = async ({
         ...filter,
         ...(search
           ? {
-            $or: [
-              { bookingNumber: { $regex: search, $options: "i" } },
+              $or: [
+                { bookingNumber: { $regex: search, $options: "i" } },
 
-              { "user.name": { $regex: search, $options: "i" } },
-              { "user.email": { $regex: search, $options: "i" } },
-              { "user.phone": { $regex: search, $options: "i" } },
+                { "user.name": { $regex: search, $options: "i" } },
+                { "user.email": { $regex: search, $options: "i" } },
+                { "user.phone": { $regex: search, $options: "i" } },
 
-              { "hotel.name": { $regex: search, $options: "i" } },
-              { "hotel.phone": { $regex: search, $options: "i" } },
-              { "hotel.city": { $regex: search, $options: "i" } },
-            ],
-          }
+                { "hotel.name": { $regex: search, $options: "i" } },
+                { "hotel.phone": { $regex: search, $options: "i" } },
+                { "hotel.city": { $regex: search, $options: "i" } },
+              ],
+            }
           : {}),
       },
     },
@@ -125,12 +187,8 @@ export const getAllBookings = async ({
     {
       $facet: {
         data: [
-          {
-            $skip: skip,
-          },
-          {
-            $limit: limit,
-          },
+          { $skip: skip },
+          { $limit: limit },
           {
             $project: {
               _id: 1,
@@ -167,20 +225,12 @@ export const getAllBookings = async ({
               },
 
               numberOfGuests: 1,
-              status: {
-                $cond: {
-                  if: {
-                    $and: [
-                      { $eq: ["$status", "confirmed"] },
-                      { $lt: ["$checkOutDate", new Date()] },
-                    ],
-                  },
-                  then: "completed",
-                  else: "$status",
-                },
-              },
+              roomsBooked: 1,
+              status: 1,
               totalAmount: 1,
               bookingDate: 1,
+              cancelledAt: 1,
+              completedAt: 1,
               createdAt: 1,
               updatedAt: 1,
             },
@@ -213,26 +263,6 @@ export const getAllBookings = async ({
       hasPreviousPage: page > 1,
     },
   };
-};
-
-const generateBookingNumber = () => {
-  const year = new Date().getFullYear();
-  const randomNumber = Math.floor(100000 + Math.random() * 900000);
-
-  return `HB-${year}-${randomNumber}`;
-};
-
-import mongoose from "mongoose";
-
-import Booking from "../models/booking.model.js";
-import User from "../models/user.model.js";
-import Hotel from "../models/hotel.model.js";
-
-const generateBookingNumber = () => {
-  const year = new Date().getFullYear();
-  const randomNumber = Math.floor(100000 + Math.random() * 900000);
-
-  return `HB-${year}-${randomNumber}`;
 };
 
 export const createBooking = async ({
@@ -321,8 +351,21 @@ export const createBooking = async ({
 
   const roomsRequired = Math.ceil(guests / selectedRoomType.capacity);
 
-  if (hotel.availableRooms < roomsRequired) {
-    const error = new Error("Not enough rooms available");
+  const bookedRooms = await getBookedRoomsForHotel({
+    hotelId,
+    checkInDate: checkIn,
+    checkOutDate: checkOut,
+  });
+
+  const actualAvailableRooms = hotel.availableRooms - bookedRooms;
+
+  if (actualAvailableRooms <= 0 || actualAvailableRooms < roomsRequired) {
+    const error = new Error(
+      `Not enough rooms available. Only ${Math.max(
+        actualAvailableRooms,
+        0
+      )} room(s) available`
+    );
     error.statusCode = 400;
     throw error;
   }
@@ -332,6 +375,7 @@ export const createBooking = async ({
     userId,
     hotelId,
     roomType,
+    roomsBooked: roomsRequired,
     checkInDate: checkIn,
     checkOutDate: checkOut,
     numberOfGuests: guests,
@@ -340,54 +384,8 @@ export const createBooking = async ({
     bookingDate: new Date(),
   });
 
-  const updatedHotel = await Hotel.findOneAndUpdate(
-    {
-      _id: hotelId,
-      availableRooms: {
-        $gte: roomsRequired,
-      },
-    },
-    {
-      $inc: {
-        availableRooms: -roomsRequired,
-        totalBooked: 1,
-      },
-    },
-    {
-      new: true,
-      runValidators: true,
-    }
-  );
-
-  if (!updatedHotel) {
-    await Booking.findByIdAndDelete(booking._id);
-
-    const error = new Error("Not enough rooms available");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  await User.findByIdAndUpdate(
-    userId,
-    {
-      $inc: {
-        bookings: 1,
-      },
-    },
-    {
-      runValidators: true,
-    }
-  );
-
   return booking;
 };
-
-const allowedBookingStatuses = [
-  "pending",
-  "confirmed",
-  "cancelled",
-  "completed",
-];
 
 export const updateBookingStatus = async ({ bookingId, status }) => {
   if (!mongoose.Types.ObjectId.isValid(bookingId)) {
@@ -402,20 +400,92 @@ export const updateBookingStatus = async ({ bookingId, status }) => {
     throw error;
   }
 
-  const booking = await Booking.findByIdAndUpdate(
-    bookingId,
-    { status },
-    {
-      new: true,
-      runValidators: true,
-    }
-  ).lean();
+  const booking = await Booking.findById(bookingId);
 
   if (!booking) {
     const error = new Error("Booking not found");
     error.statusCode = 404;
     throw error;
   }
+
+  if (booking.status === status) {
+    return booking;
+  }
+
+  if (booking.status === "cancelled") {
+    const error = new Error("Cancelled booking status cannot be changed");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (booking.status === "completed") {
+    const error = new Error("Completed booking status cannot be changed");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const validTransitions = {
+    pending: ["confirmed", "cancelled"],
+    confirmed: ["completed", "cancelled"],
+  };
+
+  if (!validTransitions[booking.status]?.includes(status)) {
+    const error = new Error(
+      `Booking status cannot be changed from '${booking.status}' to '${status}'`
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  booking.status = status;
+
+  if (status === "cancelled") {
+    booking.cancelledAt = new Date();
+  }
+
+  if (status === "completed") {
+    booking.completedAt = new Date();
+  }
+
+  await booking.save();
+
+  return booking;
+};
+
+export const cancelBooking = async ({ bookingId }) => {
+  if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+    const error = new Error("Invalid bookingId");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    status: {
+      $in: ["pending", "confirmed"],
+    },
+  });
+
+  if (!booking) {
+    const existingBooking = await Booking.findById(bookingId).lean();
+
+    if (!existingBooking) {
+      const error = new Error("Booking not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const error = new Error(
+      `Booking with status '${existingBooking.status}' cannot be cancelled`
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  booking.status = "cancelled";
+  booking.cancelledAt = new Date();
+
+  await booking.save();
 
   return booking;
 };

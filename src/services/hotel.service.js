@@ -3,7 +3,7 @@ import Hotel from "../models/hotel.model.js";
 const allowedSortFields = {
   name: "name",
   rating: "rating",
-  availability: "availableRooms",
+  availability: "actualAvailableRooms",
   totalBooked: "totalBooked",
   createdAt: "createdAt",
 };
@@ -61,16 +61,99 @@ export const getAllHotels = async ({
     {
       $lookup: {
         from: "bookings",
-        localField: "_id",
-        foreignField: "hotelId",
-        as: "hotelBookings",
+        let: {
+          hotelId: "$_id",
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$hotelId", "$$hotelId"] },
+                  {
+                    $in: ["$status", ["pending", "confirmed"]],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            $group: {
+              _id: "$hotelId",
+              bookedRooms: {
+                $sum: "$roomsBooked",
+              },
+            },
+          },
+        ],
+        as: "activeBookingStats",
+      },
+    },
+
+    {
+      $lookup: {
+        from: "bookings",
+        let: {
+          hotelId: "$_id",
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$hotelId", "$$hotelId"] },
+                  {
+                    $in: ["$status", ["confirmed", "completed"]],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            $count: "count",
+          },
+        ],
+        as: "totalBookingStats",
       },
     },
 
     {
       $addFields: {
+        bookedRooms: {
+          $ifNull: [
+            {
+              $arrayElemAt: ["$activeBookingStats.bookedRooms", 0],
+            },
+            0,
+          ],
+        },
+
+        actualAvailableRooms: {
+          $max: [
+            {
+              $subtract: [
+                "$availableRooms",
+                {
+                  $ifNull: [
+                    {
+                      $arrayElemAt: ["$activeBookingStats.bookedRooms", 0],
+                    },
+                    0,
+                  ],
+                },
+              ],
+            },
+            0,
+          ],
+        },
+
         totalBooked: {
-          $size: "$hotelBookings",
+          $ifNull: [
+            {
+              $arrayElemAt: ["$totalBookingStats.count", 0],
+            },
+            0,
+          ],
         },
       },
     },
@@ -86,8 +169,12 @@ export const getAllHotels = async ({
         rating: 1,
         amenities: 1,
         roomTypes: 1,
-        availableRooms: 1,
+
+        totalRooms: "$availableRooms",
+        availableRooms: "$actualAvailableRooms",
+        bookedRooms: 1,
         totalBooked: 1,
+
         isActive: 1,
         createdAt: 1,
         updatedAt: 1,

@@ -39,13 +39,31 @@ export const getAllUsers = async ({
     matchStage,
 
     {
-      $lookup: {
-        from: "bookings",
-        localField: "_id",
-        foreignField: "userId",
-        as: "userBookings",
-      },
+  $lookup: {
+    from: "bookings",
+    let: {
+      userId: "$_id",
     },
+    pipeline: [
+      {
+        $match: {
+          $expr: {
+            $and: [
+              { $eq: ["$userId", "$$userId"] },
+              {
+                $in: [
+                  "$status",
+                  ["confirmed", "completed"],
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ],
+    as: "userBookings",
+  },
+},
 
     {
       $addFields: {

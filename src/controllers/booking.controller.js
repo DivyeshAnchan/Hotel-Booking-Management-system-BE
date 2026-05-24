@@ -1,4 +1,4 @@
-import { getAllBookings ,createBooking,updateBookingStatus} from "../services/booking.service.js";
+import { getAllBookings ,createBooking,updateBookingStatus,cancelBooking} from "../services/booking.service.js";
 
 const allowedRoomTypes = ["standard", "deluxe", "suite", "villa"];
 const allowedStatuses = ["pending", "confirmed", "cancelled", "completed"];
@@ -114,6 +114,27 @@ export const updateBookingStatusController = async (req, res) => {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to update booking status",
+    });
+  }
+};
+
+export const cancelBookingController = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    const booking = await cancelBooking({ bookingId });
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking cancelled successfully",
+      data: booking,
+    });
+  } catch (error) {
+    console.error("Cancel Booking Error:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to cancel booking",
     });
   }
 };
