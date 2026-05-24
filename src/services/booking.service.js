@@ -222,6 +222,19 @@ const generateBookingNumber = () => {
   return `HB-${year}-${randomNumber}`;
 };
 
+import mongoose from "mongoose";
+
+import Booking from "../models/booking.model.js";
+import User from "../models/user.model.js";
+import Hotel from "../models/hotel.model.js";
+
+const generateBookingNumber = () => {
+  const year = new Date().getFullYear();
+  const randomNumber = Math.floor(100000 + Math.random() * 900000);
+
+  return `HB-${year}-${randomNumber}`;
+};
+
 export const createBooking = async ({
   userId,
   hotelId,
@@ -231,90 +244,142 @@ export const createBooking = async ({
   totalAmount,
   numberOfGuests,
 }) => {
-  const session = await mongoose.startSession();
-
-  session.startTransaction();
-
-  try {
-    const user = await User.findById(userId).session(session);
-
-    if (!user) {
-      throw new Error("User not found");
-    }
-
-    const hotel = await Hotel.findById(hotelId).session(session);
-
-    if (!hotel) {
-      throw new Error("Hotel not found");
-    }
-
-    if (!hotel.isActive) {
-      throw new Error("Hotel is inactive");
-    }
-
-    const selectedRoomType = hotel.roomTypes.find(
-      (room) => room.type === roomType
-    );
-
-    if (!selectedRoomType) {
-      throw new Error("Room type not available");
-    }
-
-    const roomsRequired = Math.ceil(
-      numberOfGuests / selectedRoomType.capacity
-    );
-
-    if (hotel.availableRooms < roomsRequired) {
-      throw new Error("Not enough rooms available");
-    }
-
-    const booking = await Booking.create(
-      [
-        {
-          bookingNumber: generateBookingNumber(),
-
-          userId,
-          hotelId,
-
-          roomType,
-
-          checkInDate,
-          checkOutDate,
-
-          numberOfGuests,
-
-          totalAmount,
-
-          status: "pending",
-
-          bookingDate: new Date(),
-        },
-      ],
-      { session }
-    );
-
-    hotel.availableRooms -= roomsRequired;
-
-    hotel.totalBooked += 1;
-
-    await hotel.save({ session });
-
-    user.bookings += 1;
-
-    await user.save({ session });
-
-    await session.commitTransaction();
-
-    session.endSession();
-
-    return booking[0];
-  } catch (error) {
-    await session.abortTransaction();
-
-    session.endSession();
-
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    const error = new Error("Invalid userId");
+    error.statusCode = 400;
     throw error;
   }
+
+  if (!mongoose.Types.ObjectId.isValid(hotelId)) {
+    const error = new Error("Invalid hotelId");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const user = await User.findById(userId).lean();
+
+  if (!user) {
+    const error = new Error("User not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const hotel = await Hotel.findById(hotelId).lean();
+
+  if (!hotel) {
+    const error = new Error("Hotel not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (!hotel.isActive) {
+    const error = new Error("Hotel is inactive");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const selectedRoomType = hotel.roomTypes.find(
+    (room) => room.type === roomType
+  );
+
+  if (!selectedRoomType) {
+    const error = new Error("Room type not available");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const checkIn = new Date(checkInDate);
+  const checkOut = new Date(checkOutDate);
+
+  if (Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime())) {
+    const error = new Error("Invalid check-in or check-out date");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (checkOut <= checkIn) {
+    const error = new Error("Check-out date must be after check-in date");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const guests = Number(numberOfGuests);
+
+  if (!Number.isInteger(guests) || guests < 1) {
+    const error = new Error("Number of guests must be at least 1");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const amount = Number(totalAmount);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    const error = new Error("Total amount must be a valid positive number");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const roomsRequired = Math.ceil(guests / selectedRoomType.capacity);
+
+  if (hotel.availableRooms < roomsRequired) {
+    const error = new Error("Not enough rooms available");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const booking = await Booking.create({
+    bookingNumber: generateBookingNumber(),
+    userId,
+    hotelId,
+    roomType,
+    checkInDate: checkIn,
+    checkOutDate: checkOut,
+    numberOfGuests: guests,
+    totalAmount: amount,
+    status: "pending",
+    bookingDate: new Date(),
+  });
+
+  const updatedHotel = await Hotel.findOneAndUpdate(
+    {
+      _id: hotelId,
+      availableRooms: {
+        $gte: roomsRequired,
+      },
+    },
+    {
+      $inc: {
+        availableRooms: -roomsRequired,
+        totalBooked: 1,
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    }
+  );
+
+  if (!updatedHotel) {
+    await Booking.findByIdAndDelete(booking._id);
+
+    const error = new Error("Not enough rooms available");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await User.findByIdAndUpdate(
+    userId,
+    {
+      $inc: {
+        bookings: 1,
+      },
+    },
+    {
+      runValidators: true,
+    }
+  );
+
+  return booking;
 };
 
 const allowedBookingStatuses = [
