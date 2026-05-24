@@ -1,4 +1,4 @@
-import { getAllBookings } from "../services/booking.service.js";
+import { getAllBookings ,createBooking,updateBookingStatus} from "../services/booking.service.js";
 
 const allowedRoomTypes = ["standard", "deluxe", "suite", "villa"];
 const allowedStatuses = ["pending", "confirmed", "cancelled", "completed"];
@@ -71,6 +71,49 @@ export const getBookings = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch bookings",
+    });
+  }
+};
+
+export const createBookingController = async (req, res) => {
+  try {
+    const booking = await createBooking(req.body);
+
+    return res.status(201).json({
+      success: true,
+      message: "Booking created successfully",
+      data: booking,
+    });
+  } catch (error) {
+    console.error("Create Booking Error:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to create booking",
+    });
+  }
+};
+
+export const updateBookingStatusController = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { status } = req.body;
+
+    const booking = await updateBookingStatus({
+      bookingId,
+      status,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking status updated successfully",
+    });
+  } catch (error) {
+    console.error("Update Booking Status Error:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to update booking status",
     });
   }
 };

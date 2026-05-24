@@ -3,7 +3,6 @@ import Hotel from "../models/hotel.model.js";
 const allowedSortFields = {
   name: "name",
   rating: "rating",
-  pricePerNight: "pricePerNight",
   availability: "availableRooms",
   totalBooked: "totalBooked",
   createdAt: "createdAt",
@@ -22,51 +21,97 @@ export const getAllHotels = async ({
 }) => {
   const skip = (page - 1) * limit;
 
-  const filter = {};
+  const matchFilter = {};
 
   if (search) {
-    filter.$or = [
+    matchFilter.$or = [
       { name: { $regex: search, $options: "i" } },
       { phone: { $regex: search, $options: "i" } },
     ];
   }
 
   if (state) {
-    filter.state = { $regex: `^${state}$`, $options: "i" };
+    matchFilter.state = { $regex: `^${state}$`, $options: "i" };
   }
 
   if (city) {
-    filter.city = { $regex: `^${city}$`, $options: "i" };
+    matchFilter.city = { $regex: `^${city}$`, $options: "i" };
   }
 
   if (rating) {
-    filter.rating = { $gte: Number(rating) };
+    matchFilter.rating = { $gte: Number(rating) };
   }
 
   if (status === "active") {
-    filter.isActive = true;
+    matchFilter.isActive = true;
   }
 
   if (status === "inactive") {
-    filter.isActive = false;
+    matchFilter.isActive = false;
   }
 
   const sortField = allowedSortFields[sortBy] || "createdAt";
   const sortDirection = sortOrder === "asc" ? 1 : -1;
 
-  const [hotels, totalItems] = await Promise.all([
-    Hotel.find(filter)
-      .select(
-        "name location city state country phone rating amenities pricePerNight availableRooms totalBooked isActive createdAt updatedAt"
-      )
-      .sort({ [sortField]: sortDirection })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
+  const pipeline = [
+    {
+      $match: matchFilter,
+    },
 
-    Hotel.countDocuments(filter),
-  ]);
+    {
+      $lookup: {
+        from: "bookings",
+        localField: "_id",
+        foreignField: "hotelId",
+        as: "hotelBookings",
+      },
+    },
 
+    {
+      $addFields: {
+        totalBooked: {
+          $size: "$hotelBookings",
+        },
+      },
+    },
+
+    {
+      $project: {
+        name: 1,
+        location: 1,
+        city: 1,
+        state: 1,
+        country: 1,
+        phone: 1,
+        rating: 1,
+        amenities: 1,
+        roomTypes: 1,
+        availableRooms: 1,
+        totalBooked: 1,
+        isActive: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+
+    {
+      $sort: {
+        [sortField]: sortDirection,
+      },
+    },
+
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: limit }],
+        totalCount: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const [result] = await Hotel.aggregate(pipeline);
+
+  const hotels = result.data;
+  const totalItems = result.totalCount[0]?.count || 0;
   const totalPages = Math.ceil(totalItems / limit);
 
   return {
@@ -80,4 +125,26 @@ export const getAllHotels = async ({
       hasPreviousPage: page > 1,
     },
   };
+};
+
+export const getAvailableStates = async () => {
+  const states = await Hotel.distinct("state", {
+    isActive: true,
+  });
+
+  return states.sort();
+};
+
+export const getAvailableCitiesByState = async (state) => {
+  const filter = {
+    isActive: true,
+  };
+
+  if (state) {
+    filter.state = { $regex: `^${state}$`, $options: "i" };
+  }
+
+  const cities = await Hotel.distinct("city", filter);
+
+  return cities.sort();
 };

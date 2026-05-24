@@ -1,4 +1,7 @@
 import Booking from "../models/booking.model.js";
+import User from "../models/user.model.js";
+import Hotel from "../models/hotel.model.js";
+import mongoose from "mongoose";
 
 const allowedSortFields = {
   bookingDate: "bookingDate",
@@ -99,18 +102,18 @@ export const getAllBookings = async ({
         ...filter,
         ...(search
           ? {
-              $or: [
-                { bookingNumber: { $regex: search, $options: "i" } },
+            $or: [
+              { bookingNumber: { $regex: search, $options: "i" } },
 
-                { "user.name": { $regex: search, $options: "i" } },
-                { "user.email": { $regex: search, $options: "i" } },
-                { "user.phone": { $regex: search, $options: "i" } },
+              { "user.name": { $regex: search, $options: "i" } },
+              { "user.email": { $regex: search, $options: "i" } },
+              { "user.phone": { $regex: search, $options: "i" } },
 
-                { "hotel.name": { $regex: search, $options: "i" } },
-                { "hotel.phone": { $regex: search, $options: "i" } },
-                { "hotel.city": { $regex: search, $options: "i" } },
-              ],
-            }
+              { "hotel.name": { $regex: search, $options: "i" } },
+              { "hotel.phone": { $regex: search, $options: "i" } },
+              { "hotel.city": { $regex: search, $options: "i" } },
+            ],
+          }
           : {}),
       },
     },
@@ -164,7 +167,18 @@ export const getAllBookings = async ({
               },
 
               numberOfGuests: 1,
-              status: 1,
+              status: {
+                $cond: {
+                  if: {
+                    $and: [
+                      { $eq: ["$status", "confirmed"] },
+                      { $lt: ["$checkOutDate", new Date()] },
+                    ],
+                  },
+                  then: "completed",
+                  else: "$status",
+                },
+              },
               totalAmount: 1,
               bookingDate: 1,
               createdAt: 1,
@@ -199,4 +213,144 @@ export const getAllBookings = async ({
       hasPreviousPage: page > 1,
     },
   };
+};
+
+const generateBookingNumber = () => {
+  const year = new Date().getFullYear();
+  const randomNumber = Math.floor(100000 + Math.random() * 900000);
+
+  return `HB-${year}-${randomNumber}`;
+};
+
+export const createBooking = async ({
+  userId,
+  hotelId,
+  checkInDate,
+  checkOutDate,
+  roomType,
+  totalAmount,
+  numberOfGuests,
+}) => {
+  const session = await mongoose.startSession();
+
+  session.startTransaction();
+
+  try {
+    const user = await User.findById(userId).session(session);
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const hotel = await Hotel.findById(hotelId).session(session);
+
+    if (!hotel) {
+      throw new Error("Hotel not found");
+    }
+
+    if (!hotel.isActive) {
+      throw new Error("Hotel is inactive");
+    }
+
+    const selectedRoomType = hotel.roomTypes.find(
+      (room) => room.type === roomType
+    );
+
+    if (!selectedRoomType) {
+      throw new Error("Room type not available");
+    }
+
+    const roomsRequired = Math.ceil(
+      numberOfGuests / selectedRoomType.capacity
+    );
+
+    if (hotel.availableRooms < roomsRequired) {
+      throw new Error("Not enough rooms available");
+    }
+
+    const booking = await Booking.create(
+      [
+        {
+          bookingNumber: generateBookingNumber(),
+
+          userId,
+          hotelId,
+
+          roomType,
+
+          checkInDate,
+          checkOutDate,
+
+          numberOfGuests,
+
+          totalAmount,
+
+          status: "pending",
+
+          bookingDate: new Date(),
+        },
+      ],
+      { session }
+    );
+
+    hotel.availableRooms -= roomsRequired;
+
+    hotel.totalBooked += 1;
+
+    await hotel.save({ session });
+
+    user.bookings += 1;
+
+    await user.save({ session });
+
+    await session.commitTransaction();
+
+    session.endSession();
+
+    return booking[0];
+  } catch (error) {
+    await session.abortTransaction();
+
+    session.endSession();
+
+    throw error;
+  }
+};
+
+const allowedBookingStatuses = [
+  "pending",
+  "confirmed",
+  "cancelled",
+  "completed",
+];
+
+export const updateBookingStatus = async ({ bookingId, status }) => {
+  if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+    const error = new Error("Invalid bookingId");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!allowedBookingStatuses.includes(status)) {
+    const error = new Error("Invalid booking status");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const booking = await Booking.findByIdAndUpdate(
+    bookingId,
+    { status },
+    {
+      new: true,
+      runValidators: true,
+    }
+  ).lean();
+
+  if (!booking) {
+    const error = new Error("Booking not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return booking;
 };
